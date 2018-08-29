@@ -132,7 +132,7 @@ def main(context):
         update_batchnorm(swa_model, train_loader, train_loader_len)
         LOG.info("Evaluating the SWA model:")
         swa_prec1 = validate(eval_loader, swa_model, swa_validation_log, global_step, epoch)
-      
+
       # do the fastSWA updates
       if args.fastswa_frequencies is not None:
         for fastswa_freq, fastswa_net, fastswa_opt, fastswa_log in zip(fastswa_freqs, fastswa_nets, fastswa_optims, fastswa_logs):
@@ -141,7 +141,7 @@ def main(context):
             fastswa_opt.update(model)
             update_batchnorm(fastswa_net, train_loader, train_loader_len)
             validate(eval_loader, fastswa_net, fastswa_log, global_step, epoch)
-      
+
       # train for one epoch
       start_time = time.time()
       if args.pimodel == 0:
@@ -181,7 +181,7 @@ def update_batchnorm(model, train_loader, train_loader_len, verbose=False):
     model.train()
     for i, ((input, ema_input), target) in enumerate(train_loader):
         # speeding things up (100 instead of ~800 updates)
-        if i > 100: 
+        if i > 100:
           return
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target.cuda(async=True), volatile=True)
@@ -189,7 +189,7 @@ def update_batchnorm(model, train_loader, train_loader_len, verbose=False):
         labeled_minibatch_size = target_var.data.ne(NO_LABEL).sum()
         assert labeled_minibatch_size > 0 # remove to get rid of error in cifar100 w aug
         model_out = model(input_var)
-        
+
         if verbose and i % 100 == 0:
             LOG.info(
                 'Updating BN. i = {}'.format(i)
@@ -211,6 +211,39 @@ def parse_dict_args(**kwargs):
     cmdline_args = list(sum(kwargs_pairs, ()))
     args = parser.parse_args(cmdline_args)
 
+
+def mixup_data(x, y, alpha=1.0, use_cuda=True):
+    '''Returns mixed inputs, pairs of targets, and lambda'''
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    if use_cuda:
+        index = torch.randperm(batch_size).cuda()
+    else:
+        index = torch.randperm(batch_size)
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def add_mixuped_data(dataset, labeled_idxs):
+
+    # for (inputs, targets) in enumerate(trainloader):
+    #    if use_cuda:
+    #        inputs, targets = inputs.cuda(), targets.cuda()
+
+    #    inputs, targets_a, targets_b, lam = mixup_data(inputs, targets,
+    #                                                   args.alpha, use_cuda)
+    labeld_images = [dataset.imgs[i] for i in labeled_idxs]
+    labels = []
+    mixedup_data = mixup_data(labeld_images, labels)
+    dataset
+
+
 def create_data_loaders_cifar100(train_transformation, eval_transformation, datadir, args, wtiny=False):
     # creating data loaders for CIFAR-100 with an option to add tiny images as unlabeled data
     traindir = os.path.join(datadir, args.train_subdir)
@@ -225,6 +258,11 @@ def create_data_loaders_cifar100(train_transformation, eval_transformation, data
             labels = dict(line.split(' ') for line in f.read().splitlines())
         labeled_idxs, unlabeled_idxs = data.relabel_dataset(dataset, labels)
     assert len(dataset.imgs) == len(labeled_idxs) + len(unlabeled_idxs)
+
+    # mixup here
+  #  add_mixuped_data(dataset,labeled_idxs)
+
+
     orig_ds_size = len(dataset.imgs)
 
     if args.exclude_unlabeled or (len(unlabeled_idxs) == 0 and args.unsup_augment is None):
@@ -358,6 +396,7 @@ def train(train_loader, train_loader_len, model, ema_model, actual_ema_model, op
     end = time.time()
 
     for i, ((input, ema_input), target) in enumerate(train_loader):
+
         meters.update('data_time', time.time() - end)
         adjust_learning_rate(optimizer, epoch, i, train_loader_len)
         meters.update('lr', optimizer.param_groups[0]['lr'])
@@ -533,7 +572,7 @@ def adjust_learning_rate(optimizer, epoch, step_in_epoch, total_steps_in_epoch):
     epoch = epoch + step_in_epoch / total_steps_in_epoch
     # LR warm-up to handle large minibatch sizes from https://arxiv.org/abs/1706.02677
     lr = ramps.linear_rampup(epoch, args.lr_rampup) * (args.lr - args.initial_lr) + args.initial_lr
-    
+
     if args.lr_rampdown_epochs:
       if epoch < args.epochs:
         # Cosine LR rampdown from https://arxiv.org/abs/1608.03983
